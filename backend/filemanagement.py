@@ -7,8 +7,6 @@ from os.path import isfile, islink, split, join, relpath, normpath, isabs, commo
 import yaml
 from aiohttp import web
 
-from backend.offline import cdsp_or_backup_cdsp
-
 
 def file_in_folder(folder, filename):
     if '/' in filename or '\\' in filename:
@@ -74,27 +72,41 @@ def zip_of_files(folder, files):
 
 
 def get_yaml_as_json(request, path):
-    with open(path, 'r') as file:
-        cdsp = cdsp_or_backup_cdsp(request)
-        yaml_config = file.read()
-        return cdsp.read_config(yaml_config)
+    validator = request.app["VALIDATOR"]
+    validator.validate_file(path)
+    return validator.get_config()
 
 
-def get_active_config(active_config):
-    if islink(active_config) and isfile(active_config):
-        target = os.readlink(active_config)
-        head, tail = split(target)
-        return tail
+def get_active_config(request):
+    active_config = request.app["active_config"]
+    on_get = request.app["on_get_active_config"]
+    if not on_get:
+        if islink(active_config) and isfile(active_config):
+            target = os.readlink(active_config)
+            _head, tail = split(target)
+            return tail
+        else:
+            return None
     else:
-        return None
+        stream = os.popen(on_get)
+        target = stream.read().strip()
+        _head, tail = split(target)
+        return tail
 
 
-def set_as_active_config(active_config, file):
-    if not active_config:
-        return
-    if islink(active_config):
-        os.unlink(active_config)
-    os.symlink(file, active_config)
+
+def set_as_active_config(request, file):
+    active_config = request.app["active_config"]
+    update = request.app["update_symlink"]
+    on_set = request.app["on_set_active_config"]
+    if update:
+        if not active_config:
+            return
+        if islink(active_config):
+            os.unlink(active_config)
+        os.symlink(file, active_config)
+    if on_set:
+        os.system(f"{on_set} {file}")
 
 
 def save_config(config_name, json_config, request):
@@ -132,7 +144,7 @@ def new_config_with_paths_converted(json_config, conversion):
 def convert_filter_path(json_filter, conversion):
     type = json_filter["type"]
     parameters = json_filter["parameters"]
-    if type == "Conv" and parameters["type"] == "File":
+    if type == "Conv" and parameters["type"] in ["Raw", "Wav"]:
         parameters["filename"] = conversion(parameters["filename"])
 
 
